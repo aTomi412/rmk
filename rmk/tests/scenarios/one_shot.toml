@@ -61,23 +61,22 @@ expect = [
   [],
 ]
 
-# A second OSM pressed while the first is still armed is a held one-shot like any
-# other: both modifiers stay until that key comes back up, instead of the state
-# being spent on the first key underneath it.
+# Pressing a second OSM doesn't consume the first: the next key gets both modifiers,
+# then LShift is consumed while the held LCtrl stays until its own key is released.
 [[test]]
 name = "osm_pressed_while_armed_is_held"
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },   # OSM(LShift) tapped, armed
   { press = [0, 4] },                          # OSM(LCtrl) pressed and held
-  { tap = { pos = [0, 2], duration = 10 } },   # A
+  { tap = { pos = [0, 2], duration = 10 } },   # A, consumes LShift
   { tap = { pos = [0, 3], duration = 10 } },   # TH(B, C) tapped, still under the held OSM
   { release = [0, 4] },                        # Release OSM(LCtrl)
 ]
 expect = [
   ["LShift", "LCtrl", "A"],
-  ["LShift", "LCtrl"],
-  ["LShift", "LCtrl", "B"],
-  ["LShift", "LCtrl"],
+  ["LCtrl"],
+  ["LCtrl", "B"],
+  ["LCtrl"],
   [],
 ]
 

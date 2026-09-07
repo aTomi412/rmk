@@ -9,7 +9,7 @@ use crate::keyboard::Keyboard;
 pub enum OneShotState<T> {
     /// A one shot key is held down, its role not decided yet
     Initial(T),
-    /// Every one shot key was released: the next key press uses it, or it expires at the deadline
+    /// The one shot key was activated, waiting for the next key, or timeout at `Instant`
     Single(T, Instant),
     /// Another key was pressed before one shot key was released, treat as a normal modifier/layer
     Held(T),
@@ -27,7 +27,7 @@ impl<T> OneShotState<T> {
         }
     }
 
-    /// Get the expiry deadline while armed (`Single`)
+    /// Get the expiry deadline while pending (`Single`)
     pub fn deadline(&self) -> Option<Instant> {
         match self {
             OneShotState::Single(_, deadline) => Some(*deadline),
@@ -48,7 +48,7 @@ impl<'a> Keyboard<'a> {
             self.osm_state = match self.osm_state {
                 OneShotState::None => OneShotState::Initial(new_modifiers),
                 OneShotState::Initial(cur_modifiers) => OneShotState::Initial(cur_modifiers | new_modifiers),
-                OneShotState::Single(cur_modifiers, _) => {
+                OneShotState::Single(cur_modifiers, deadline) => {
                     was_active = cur_modifiers & new_modifiers == new_modifiers;
 
                     if was_active {
@@ -62,7 +62,7 @@ impl<'a> Keyboard<'a> {
                             OneShotState::Initial(result)
                         }
                     } else {
-                        OneShotState::Initial(cur_modifiers | new_modifiers)
+                        OneShotState::Single(cur_modifiers | new_modifiers, deadline)
                     }
                 }
                 OneShotState::Held(cur_modifiers) => OneShotState::Held(cur_modifiers | new_modifiers),
@@ -157,11 +157,21 @@ impl<'a> Keyboard<'a> {
             // also see the modifier (resolve_explicit_modifiers only applies `Single`
             // on the pressed report anyway, so the release report is unaffected).
             OneShotState::Single(..) if event.pressed => {
-                self.osm_state = OneShotState::None;
+                self.clear_pending_osm();
                 true
             }
             _ => false,
         }
+    }
+
+    /// Drop the pending one-shot modifiers, spent or timed out. Modifiers whose one-shot
+    /// key is still down are no longer one-shot: they last until that key is released.
+    fn clear_pending_osm(&mut self) {
+        self.osm_state = if self.osm_pressed.into_bits() == 0 {
+            OneShotState::None
+        } else {
+            OneShotState::Held(self.osm_pressed)
+        };
     }
 
     pub(crate) fn update_osl(&mut self, event: KeyboardEvent) {
@@ -185,7 +195,7 @@ impl<'a> Keyboard<'a> {
         if let OneShotState::Single(_, d) = self.osm_state
             && d <= now
         {
-            self.osm_state = OneShotState::None;
+            self.clear_pending_osm();
             // Send release report because modifiers were reported as held on press
             if self.keymap.one_shot_modifiers_config().activate_on_keypress {
                 self.send_keyboard_report_with_resolved_modifiers(false).await;
