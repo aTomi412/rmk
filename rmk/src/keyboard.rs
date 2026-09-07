@@ -193,6 +193,9 @@ pub struct Keyboard<'a> {
     /// Oneshot Modifier state
     osm_state: OneShotState<ModifierCombination>,
 
+    /// Modifiers whose one-shot key is physically pressed right now
+    osm_pressed: ModifierCombination,
+
     /// In-progress User-key hold gesture (5s bond-clear etc.): the expiry
     /// deadline and the held key's user id. Any key event disarms it; only
     /// true idle for the full window completes the gesture.
@@ -252,6 +255,7 @@ impl<'a> Keyboard<'a> {
             last_press_time: Instant::now(),
             osl_state: OneShotState::default(),
             osm_state: OneShotState::default(),
+            osm_pressed: ModifierCombination::default(),
             #[cfg(feature = "_ble")]
             user_hold: None,
             caps_word: CapsWordState::default(),

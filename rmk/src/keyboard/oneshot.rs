@@ -7,11 +7,10 @@ use crate::keyboard::Keyboard;
 /// State machine for one shot keys
 #[derive(Default)]
 pub enum OneShotState<T> {
-    /// First one shot key press
+    /// A one shot key is held down, its role not decided yet
     Initial(T),
-    /// The one shot key was tapped: the next key press uses it, or it times out at the deadline.
-    /// `None` while the one shot key is held down again; releasing it sets a new deadline.
-    Single(T, Option<Instant>),
+    /// Every one shot key was released: the next key press uses it, or it expires at the deadline
+    Single(T, Instant),
     /// Another key was pressed before one shot key was released, treat as a normal modifier/layer
     Held(T),
     /// One shot inactive
@@ -31,7 +30,7 @@ impl<T> OneShotState<T> {
     /// Get the expiry deadline while armed (`Single`)
     pub fn deadline(&self) -> Option<Instant> {
         match self {
-            OneShotState::Single(_, deadline) => *deadline,
+            OneShotState::Single(_, deadline) => Some(*deadline),
             _ => None,
         }
     }
@@ -43,6 +42,7 @@ impl<'a> Keyboard<'a> {
 
         // Update one shot state
         if event.pressed {
+            self.osm_pressed |= new_modifiers;
             let mut was_active = false;
             // Add new modifier combination to existing one shot or init if none
             self.osm_state = match self.osm_state {
@@ -59,10 +59,10 @@ impl<'a> Keyboard<'a> {
                         if result.into_bits() == 0 {
                             OneShotState::None
                         } else {
-                            OneShotState::Single(result, None)
+                            OneShotState::Initial(result)
                         }
                     } else {
-                        OneShotState::Single(cur_modifiers | new_modifiers, None)
+                        OneShotState::Initial(cur_modifiers | new_modifiers)
                     }
                 }
                 OneShotState::Held(cur_modifiers) => OneShotState::Held(cur_modifiers | new_modifiers),
@@ -75,13 +75,14 @@ impl<'a> Keyboard<'a> {
                 self.send_keyboard_report_with_resolved_modifiers(true).await;
             }
         } else {
+            self.osm_pressed &= !new_modifiers;
             match self.osm_state {
                 OneShotState::Initial(cur_modifiers) | OneShotState::Single(cur_modifiers, _) => {
                     // Released before any other key: keep the modifiers armed for the
                     // next keypress. Expiry is deadline-driven from `run()`, so the
                     // keyboard task keeps serving other events in the meantime.
                     self.osm_state =
-                        OneShotState::Single(cur_modifiers, Some(Instant::now() + self.keymap.one_shot_timeout()));
+                        OneShotState::Single(cur_modifiers, Instant::now() + self.keymap.one_shot_timeout());
                 }
                 OneShotState::Held(cur_modifiers) => {
                     let was_active = cur_modifiers & new_modifiers == new_modifiers;
@@ -92,7 +93,9 @@ impl<'a> Keyboard<'a> {
 
                     // Release modifier
                     self.update_osl(event);
-                    let remaining = cur_modifiers & !new_modifiers;
+                    // Only modifiers whose one-shot key is still down stay held: an armed
+                    // one-shot folded in by this key's press has no release of its own.
+                    let remaining = cur_modifiers & self.osm_pressed;
                     self.osm_state = if remaining.into_bits() == 0 {
                         OneShotState::None
                     } else {
@@ -119,10 +122,8 @@ impl<'a> Keyboard<'a> {
 
             // Update layer of one shot
             self.osl_state = match self.osl_state {
-                OneShotState::None => OneShotState::Initial(layer_num),
-                OneShotState::Initial(_) => OneShotState::Initial(layer_num),
-                OneShotState::Single(..) => OneShotState::Single(layer_num, None),
                 OneShotState::Held(_) => OneShotState::Held(layer_num),
+                _ => OneShotState::Initial(layer_num),
             };
 
             // Activate new layer
@@ -133,7 +134,7 @@ impl<'a> Keyboard<'a> {
                     // Released before any other key: keep the layer armed for the
                     // next keypress. Expiry is deadline-driven from `run()`, so the
                     // keyboard task keeps serving other events in the meantime.
-                    self.osl_state = OneShotState::Single(l, Some(Instant::now() + self.keymap.one_shot_timeout()));
+                    self.osl_state = OneShotState::Single(l, Instant::now() + self.keymap.one_shot_timeout());
                 }
                 OneShotState::Held(layer_num) => {
                     self.osl_state = OneShotState::None;
@@ -181,7 +182,7 @@ impl<'a> Keyboard<'a> {
     pub(crate) async fn fire_oneshot_timeout(&mut self) {
         let now = Instant::now();
 
-        if let OneShotState::Single(_, Some(d)) = self.osm_state
+        if let OneShotState::Single(_, d) = self.osm_state
             && d <= now
         {
             self.osm_state = OneShotState::None;
@@ -191,7 +192,7 @@ impl<'a> Keyboard<'a> {
             }
         }
 
-        if let OneShotState::Single(l, Some(d)) = self.osl_state
+        if let OneShotState::Single(l, d) = self.osl_state
             && d <= now
         {
             self.keymap.deactivate_layer(l);
