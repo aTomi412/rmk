@@ -123,11 +123,12 @@ impl Adv<'_> {
 /// The advertisement for a host profile, with the controller's filter accept
 /// list loaded to match it.
 ///
-/// A paired profile advertises to its bonded host alone. Advertising openly
+/// A paired profile advertises to its bonded host first. Advertising openly
 /// lets every bonded host in range race for the profile, and the wrong one,
 /// holding the key of another profile, can't encrypt the link: the right host
 /// is locked out while that connection lingers, and some hosts stop
-/// reconnecting on their own after such a failure.
+/// reconnecting on their own after such a failure. The caller opens the
+/// profile up once the bonded host has let its window pass.
 ///
 /// A profile stays open when the controller can't single its host out. A host
 /// that shares an IRK connects from rotating private addresses, which only a
